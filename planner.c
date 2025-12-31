@@ -419,6 +419,9 @@ bool plan_buffer_line (float *target, plan_line_data_t *pl_data)
     memset(block, 0, sizeof(plan_block_t) - 2 * sizeof(plan_block_t *));    // Zero all block values (except linked list pointers).
     memcpy(&block->spindle, &pl_data->spindle, sizeof(spindle_t));          // Copy spindle data (RPM etc)
     block->condition = pl_data->condition;
+    // --- PATCH: plugin override per forzare G0 in M800---
+    if(pl_data->plugin_force_rapid) block->condition.rapid_motion = On;
+    // --- FINE PATCH ---
     block->overrides = pl_data->overrides;
     block->line_number = pl_data->line_number;
     block->offset_id = pl_data->offset_id;
