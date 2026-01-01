@@ -1,85 +1,90 @@
-📘 Plugin for GRBLHAL
+📘 Plugin for GRBLHAL — Internal Keyway Cycle (M800)
 
 🔧 Description
+Plugin Name: Lathe Internal Keyway Cycle
+G‑code: M800  
+Purpose: Automatic machining cycle for internal longitudinal keyways
+Features:
 
-Plugin Name: Lathe Keyway Cycle
+Multi‑pass radial cutting
 
-G-code: M800
+Full‑length Z strokes for chip evacuation
 
-Description: Parametric keyway machining cycle for lathes
+Sag compensation for internal bores
 
-Features: Multi-pass, safe return logic, validation, universal geometry.
+Safe retract logic
 
+Optional return to start
 
-🧩 1. Copy the plugin
-Copy the folder:
-keyway/
-into the Src/ directory of your GRBLHAL project, for example:
+Full validation of parameters
 
+No modifications to GRBLHAL core required
 
-    Src/
+🧩 1. Installing the plugin
+Copy the folder keyway/ into the Src/ directory of your GRBLHAL project:
 
-        keyway/
-    
-            keyway_plugin.c
-        
-            keyway_plugin.h
-        
-
-platformio.ini
+Codice
+Src/
+    keyway/
+        keyway.c
+        CMakeLists.txt
 Placing the plugin inside Src/ ensures that PlatformIO automatically compiles it without additional configuration.
-
 
 🧩 2. Update platformio.ini
 In the environment you are using (e.g., blackpill_f411ce_alt2), add:
 
-✔ Add the plugin directory to the include paths
-ini
-
+✔ Include path
+Codice
 -I Src/keyway
-
-✔ Add the plugin directory to the source filter
-ini
-
-build_src_filter = +<*> +<Src/keyway/*.c>
-
+✔ Source filter
+Codice
+build_src_filter = +<> +<Src/keyway/.c>
 ✔ Example
-ini
+Codice
 [env:blackpill_f411ce_alt2]
+build_flags = ${common.build_flags} -I Src/keyway
+build_src_filter = +<> +<Src/keyway/.c>
 
-build_flags = ${common.build_flags}
-  -I Src/keyway
+🧩 3. Planner patch — NOT REQUIRED
+Older versions of the plugin required a patch to force G0 moves.
+The current version does not require any modification to GRBLHAL.
 
-build_src_filter = +<*> +<Src/keyway/*.c>
+The plugin uses:
 
+plan_data_init()
 
-🧩 3. Required patch to the GRBLHAL planner
-The plugin requires a small extension to the planner to allow forced G0 moves.
+plan_line_data_t.condition.rapid_motion
 
-✔ In planner.h, inside plan_line_data_t, add:
-c
+mc_line()
 
-bool plugin_force_rapid; // <--- ADDED FOR PATCH: plugin override to force G0 in M800
+protocol_buffer_synchronize()
 
-✔ In planner.c, inside the block construction logic, add:
-c
+All motion is handled using standard GRBLHAL mechanisms.
 
-// --- PATCH: plugin override to force G0 in M800 ---
-
-if(pl_data->plugin_force_rapid)    block->condition.rapid_motion = On;
-    
-// --- END PATCH ---
-
-This is the only required patch.
-
-The repository already includes the pre‑patched GRBLHAL (Version: 20251207) source files for convenience.
-  
-These files contain the patch above already applied, allowing immediate compilation without manual modifications.
-
+✔ Fully compatible with upstream GRBLHAL
 
 🧩 4. Using the M800 command
 Syntax
-M800 D<depth X> L<length Z> P<step X> R<retract Z> F<feed> [N<repetitions>] [H<return>]
+
+M800 D<depth> Q<length> S<tool width> P<step> R<retract> [L<reps>] [H<return>]
+
+Parameters
+
+Word	Meaning	Notes
+
+D	Final X depth	> 0
+
+Q	Keyway length in Z	> 0 (cut in −Z)
+
+S	Tool width	used for sag compensation
+
+P	Depth step per pass	P ≤ D
+
+R	Z retract	> 0
+
+L	Repetitions per depth	integer ≥ 1 (default = 1)
+
+H	Return to start	H1 = yes (default), H0 = no
 
 Example
 
@@ -90,12 +95,15 @@ M5
 
 G0 X10 Z10
 
-M800 D2 L10 P0.5 R2 F1000 N1 H1
+F1000
 
+M800 D2 Q10 S8 P0.5 R2 L1 H1
 
-✔ Compatibility
-The M800 Keyway plugin has been tested and verified on:
+M30
+
+🧩 5. Compatibility
+The M800 Keyway plugin has been tested on:
 
 WeAct Blackpill F411CE (STM32F411CEU6)
 
-Other GRBLHAL boards may be compatible, but have not yet been tested.
+Other GRBLHAL boards may be compatible but have not yet been tested.
