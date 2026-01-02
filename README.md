@@ -2,51 +2,99 @@
 
 🔧 Description
 Plugin Name: Lathe Internal Keyway Cycle
+
 G‑code: M800  
+
 Purpose: Automatic machining cycle for internal longitudinal keyways
+
 Features:
 
-Multi‑pass radial cutting
+Radial depth stepping
 
-Full‑length Z strokes for chip evacuation
+Axial cutting strokes
 
-Sag compensation for internal bores
+Sag compensation for correct geometry and collision avoidance
 
 Safe retract logic
 
 Optional return to start
 
-Full validation of parameters
+Full parameter validation
 
-No modifications to GRBLHAL core required
 
-🧩 1. Installing the plugin
-Copy the folder keyway/ into the Src/ directory of your GRBLHAL project:
+🧩 1. Installation
 
-Codice
-Src/
-    keyway/
-        keyway.c
-        CMakeLists.txt
-Placing the plugin inside Src/ ensures that PlatformIO automatically compiles it without additional configuration.
+A. Plugin Placement
 
-🧩 2. Update platformio.ini
-In the environment you are using (e.g., blackpill_f411ce_alt2), add:
+Copy the keyway/ folder to the ROOT of your GRBLHAL project (same level as grbl/, boards/, etc.):
 
-✔ Include path
-Codice
--I Src/keyway
-✔ Source filter
-Codice
-build_src_filter = +<> +<Src/keyway/.c>
-✔ Example
-Codice
+
+    your_grblhal_project/
+
+    ├── keyway/           ← Copy this folder here
+    
+    │   └── keyway.c
+
+    ├── grbl/
+
+    ├── boards/
+
+    ├── Inc/
+
+    ├── Src/
+
+    └── platformio.ini
+
+⚠️ It must be at the same level as the grbl folder.
+
+B. PlatformIO Configuration
+
+Add these lines to your platformio.ini:
+
+In the [common] section:
+
+[common]
+
+lib_deps =
+
+      ... other directories ...
+      
+    keyway           ← Add this line
+    
+In your specific environment (e.g., blackpill_f411ce_alt2):
+
+
 [env:blackpill_f411ce_alt2]
-build_flags = ${common.build_flags} -I Src/keyway
-build_src_filter = +<> +<Src/keyway/.c>
 
-🧩 3. Planner patch — NOT REQUIRED
-Older versions of the plugin required a patch to force G0 moves.
+build_flags = ${common.build_flags}
+
+     ... other flags ...
+    
+    -D M800_ENABLE=1    # Enable the plugin
+    
+    -D M800_DEBUG=1     # Enable debug output (optional)
+    
+
+C. Update plugins_init.h
+
+Add this code to Inc/plugins_init.h (in the "Third party plugin definitions" section):
+
+    // ... existing code ...
+    
+    // Third party plugin definitions.
+    
+    #if M800_ENABLE
+        extern void keyway_init (void);
+        keyway_init();
+    #endif
+
+    // ... rest of the code ...
+
+
+🧩 3. Patch — NOT REQUIRED
+
+Older versions of the plugin required a patch planner to force G0 moves.
+
 The current version does not require any modification to GRBLHAL.
 
 The plugin uses:
@@ -61,16 +109,13 @@ protocol_buffer_synchronize()
 
 All motion is handled using standard GRBLHAL mechanisms.
 
-✔ Fully compatible with upstream GRBLHAL
+Fully compatible with upstream GRBLHAL
 
-🧩 4. Using the M800 command
-Syntax
+🧩 4. Using the M800 command Syntax
 
-M800 D<depth> Q<length> S<tool width> P<step> R<retract> [L<reps>] [H<return>]
+    M800 D<depth> Q<length> S<tool width> P<step> R<retract> [L<reps>] [H<return>]
 
 Parameters
-
-Word	Meaning	Notes
 
 D	Final X depth	> 0
 
@@ -86,20 +131,15 @@ L	Repetitions per depth	integer ≥ 1 (default = 1)
 
 H	Return to start	H1 = yes (default), H0 = no
 
-Example
+    Example
 
-G90
-G21
-
-M5
-
-G0 X10 Z10
-
-F1000
-
-M800 D2 Q10 S8 P0.5 R2 L1 H1
-
-M30
+    G90
+    G21
+    M5
+    G0 X10 Z10
+    F1000
+    M800 D2 Q10 S8 P0.5 R2 L1 H1
+    M30
 
 🧩 5. Compatibility
 The M800 Keyway plugin has been tested on:
