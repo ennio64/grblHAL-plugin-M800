@@ -163,6 +163,11 @@
 #define M800_LOG(...)
 #endif
 
+#define M800_LOCK_UNUSED_AXES(t) \
+    t[Y_AXIS] = Y_start;         \
+    t[A_AXIS] = A_start;
+
+
 #include "grbl/hal.h"
 #include "grbl/protocol.h"
 #include "grbl/motion_control.h"
@@ -270,6 +275,12 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     float X_start = X_raw / settings.axis[X_AXIS].steps_per_mm;
     float Z_start = Z_raw / settings.axis[Z_AXIS].steps_per_mm;
 
+    // -------------------------------------------------------------------------
+    // POSIZIONI DI Y E A (in mm)
+    // -------------------------------------------------------------------------
+    float Y_start = sys.position[Y_AXIS] / settings.axis[Y_AXIS].steps_per_mm;
+    float A_start = sys.position[A_AXIS] / settings.axis[A_AXIS].steps_per_mm;
+
     // ALWAYS ON
     hal.stream.write("M800 CYCLE START\r\n");
 
@@ -322,6 +333,8 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     target[X_AXIS] = X_new_start;
     target[Z_AXIS] = Z_start + R;
 
+    M800_LOCK_UNUSED_AXES(target);
+
     M800_LOG("M800 G0 SAG POS: X=%.3f Z=%.3f\r\n",
              target[X_AXIS], target[Z_AXIS]);
 
@@ -334,27 +347,32 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
 
         target[X_AXIS] = X_new_start;
         target[Z_AXIS] = Z_start + R;
+        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G0 SAFE (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
 
         target[X_AXIS] = X_new_start;
         target[Z_AXIS] = Z_start + R;
+        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G1 DEPTH (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g1);
 
         target[Z_AXIS] = Z_start + Q;
+        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G1 LENGTH (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g1);
 
         target[X_AXIS] = X_new_start;
+        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G0 BACKX (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
 
         target[Z_AXIS] = Z_start + R;
+        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G0 BACKZ (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
@@ -377,27 +395,32 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
 
             target[X_AXIS] = X_new_start;
             target[Z_AXIS] = Z_start + R;
+            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G0 SAFE:   X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
 
             target[X_AXIS] = X_target;
             target[Z_AXIS] = Z_start + R;
+            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G1 DEPTH:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g1);
 
             target[Z_AXIS] = Z_start + Q;
+            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G1 LENGTH: X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g1);
 
             target[X_AXIS] = X_new_start;
+            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G0 BACKX:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
 
             target[Z_AXIS] = Z_start + R;
+            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G0 BACKZ:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
@@ -419,15 +442,15 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
         target[Z_AXIS] = Z_start + R;
     }
 
+    M800_LOCK_UNUSED_AXES(target);
+
     M800_LOG("M800 RETURN: X=%.3f Z=%.3f\r\n",
              target[X_AXIS], target[Z_AXIS]);
 
     mc_line(target, &plan_g0);
 
-    // -------------------------------------------------------------------------
-    // SINCRONIZZA — ORA IL CICLO È REALMENTE FINITO
-    // -------------------------------------------------------------------------
     protocol_buffer_synchronize();
+
     // ALWAYS ON
     hal.stream.write("M800 CYCLE END\r\n");
 }
