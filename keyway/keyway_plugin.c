@@ -1,4 +1,4 @@
-// ============================================================================
+	// ============================================================================
 //  M800 – Internal Longitudinal Keyway Cutting Cycle for Lathe
 // ============================================================================
 //
@@ -151,7 +151,7 @@
 //
 // ----------------------------------------------------------------------------
 
-
+#ifdef M800_ENABLE
 
 #ifndef M800_DEBUG
 #define M800_DEBUG 1   // 1 = debug attivo, 0 = debug disattivato
@@ -436,7 +436,8 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
 // INIT
 // -----------------------------------------------------------------------------
 
-void my_plugin_init(void)
+void keyway_init(void)
+
 {
     memcpy(&user_mcode_prev, &grbl.user_mcode, sizeof(user_mcode_ptrs_t));
 
@@ -444,3 +445,5 @@ void my_plugin_init(void)
     grbl.user_mcode.validate = m800_validate;
     grbl.user_mcode.execute  = m800_execute;
 }
+
+#endif // M800_ENABLE
