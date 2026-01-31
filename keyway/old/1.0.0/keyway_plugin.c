@@ -151,12 +151,10 @@
 //
 // ----------------------------------------------------------------------------
 
-#include "keyway.h"
-
 #ifdef M800_ENABLE
 
 #ifndef M800_DEBUG
-#define M800_DEBUG 1   // 1 = debug ON, 0 = debug OFF
+#define M800_DEBUG 1   // 1 = debug attivo, 0 = debug disattivato
 #endif
 
 #if M800_DEBUG
@@ -166,7 +164,9 @@
 #endif
 
 #define M800_LOCK_UNUSED_AXES(t) \
-    m800_lock_unused_axes(t, start_pos, dbg)
+    t[Y_AXIS] = Y_start;         \
+    t[A_AXIS] = A_start;
+
 
 #include "grbl/hal.h"
 #include "grbl/protocol.h"
@@ -241,47 +241,6 @@ static status_code_t m800_validate(parser_block_t *gc_block)
     return Status_OK;
 }
 
-// -----------------------------------------------------------------------------
-// LOCK UNUSED AXES
-// -----------------------------------------------------------------------------
-
-// This function ensures that only the axes actually used by the M800 cycle
-// (X and Z) are allowed to move. All other present axes (Y, A, etc.) are forced
-// to remain at their starting position.
-//
-// Notes:
-// - "Present" axes are detected by checking whether they have valid motion
-//   parameters (steps_per_mm > 0 for linear axes, or max_rate > 0 for rotary).
-// - If an axis is present but its target position has not changed compared to
-//   the starting position, it is locked by restoring the start position.
-// - No debug printing is done here anymore; this function is purely mechanical.
-// -----------------------------------------------------------------------------
-
-static void m800_lock_unused_axes(float *t,
-                                  const float start_pos[N_AXIS],
-                                  char dbg_buf[128])
-{
-    for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
-
-        // Determine whether the axis physically exists on this machine.
-        // Linear axes have steps_per_mm > 0.
-        // Rotary axes have max_rate > 0.
-        bool axis_present =
-            (settings.axis[axis].steps_per_mm > 0.0f) ||
-            (settings.axis[axis].max_rate > 0.0f);
-
-        if (!axis_present)
-            continue;   // Skip axes that do not exist.
-
-        float before = t[axis];         // Target position computed by the cycle
-        float start  = start_pos[axis]; // Machine position at cycle start
-
-        // If the cycle did not modify this axis, lock it by restoring start_pos.
-        if (before == start) {
-            t[axis] = start;
-        }
-    }
-}
 
 // -----------------------------------------------------------------------------
 // EXECUTE
@@ -296,21 +255,6 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     }
 
     char dbg[128];
-
-float start_pos[N_AXIS];
-
-for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
-
-    bool axis_present =
-        (settings.axis[axis].steps_per_mm > 0.0f) ||
-        (settings.axis[axis].max_rate > 0.0f);
-
-    if (axis_present) {
-        start_pos[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
-    } else {
-        start_pos[axis] = 0.0f;
-    }
-}
 
     // -------------------------------------------------------------------------
     // PARAMETRI
@@ -330,6 +274,12 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
 
     float X_start = X_raw / settings.axis[X_AXIS].steps_per_mm;
     float Z_start = Z_raw / settings.axis[Z_AXIS].steps_per_mm;
+
+    // -------------------------------------------------------------------------
+    // POSIZIONI DI Y E A (in mm)
+    // -------------------------------------------------------------------------
+    float Y_start = sys.position[Y_AXIS] / settings.axis[Y_AXIS].steps_per_mm;
+    float A_start = sys.position[A_AXIS] / settings.axis[A_AXIS].steps_per_mm;
 
     // ALWAYS ON
     hal.stream.write("M800 CYCLE START\r\n");
@@ -360,12 +310,6 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
 
     M800_LOG("M800 SAG: R=%.3f C=%.3f sag=%.3f X_new_start=%.3f Dcorr=%.3f Xfinal=%.3f\r\n",
              Rbore, Cslot, sag, X_new_start, Dcorr, X_final);
-
-    // -------------------------------------------------------------------------
-    // PRINT AXIS MASK
-    // -------------------------------------------------------------------------
-
-    M800_LOG("M800 AXIS MASK: XZ USED | YA BLOCKED\r\n");
 
     // -------------------------------------------------------------------------
     // PRE-POSIZIONAMENTO
