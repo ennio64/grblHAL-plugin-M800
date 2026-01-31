@@ -33,8 +33,11 @@ Copy the keyway/ folder to the ROOT of your GRBLHAL project (same level as grbl/
 
     ├── keyway/           ← Copy this folder here
     
+    │   └── keyway.h
     │   └── keyway.c
-
+    │   └── library.json
+    │   └── CMakeLists.txt
+    
     ├── grbl/
 
     ├── boards/
