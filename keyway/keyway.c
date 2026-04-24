@@ -183,21 +183,32 @@ static user_mcode_ptrs_t user_mcode_prev;
 
 
 // -----------------------------------------------------------------------------
-// HELPER: INITIALIZE TARGET WITH CURRENT MACHINE POSITION (ALL AXES)
+// HELPER: GET CURRENT MACHINE POSITION IN MM/DEGREES
 // -----------------------------------------------------------------------------
 
-static void m800_init_target(float target[N_AXIS])
+static void m800_get_current_pos(float pos[N_AXIS])
 {
     for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
         bool axis_present = (settings.axis[axis].steps_per_mm > 0.0f) ||
                             (settings.axis[axis].max_rate > 0.0f);
         
         if (axis_present) {
-            // Convert from steps to machine units (mm/degrees)
-            target[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
+            pos[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
         } else {
-            target[axis] = 0.0f;
+            pos[axis] = 0.0f;
         }
+    }
+}
+
+
+// -----------------------------------------------------------------------------
+// HELPER: COPY POSITION FROM SOURCE TO TARGET (ALL AXES)
+// -----------------------------------------------------------------------------
+
+static void m800_copy_pos(float target[N_AXIS], const float source[N_AXIS])
+{
+    for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
+        target[axis] = source[axis];
     }
 }
 
@@ -279,24 +290,15 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     float start_pos[N_AXIS];
     float X_start = 0.0f, Z_start = 0.0f;
 
-    for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
-        bool axis_present = (settings.axis[axis].steps_per_mm > 0.0f) ||
-                            (settings.axis[axis].max_rate > 0.0f);
-
-        if (axis_present) {
-            start_pos[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
-            if (axis == X_AXIS) X_start = start_pos[axis];
-            if (axis == Z_AXIS) Z_start = start_pos[axis];
-        } else {
-            start_pos[axis] = 0.0f;
-        }
-    }
+    m800_get_current_pos(start_pos);
+    X_start = start_pos[X_AXIS];
+    Z_start = start_pos[Z_AXIS];
 
     // -------------------------------------------------------------------------
     // PARAMETERS
     // -------------------------------------------------------------------------
     float D = gc_block->values.d;
-    float Q = -gc_block->values.q;
+    float Q = -gc_block->values.q;           // Negative Z direction
     float W =  gc_block->values.s;
     float P =  gc_block->values.p;
     float R =  gc_block->values.r;
@@ -335,7 +337,7 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     M800_LOG("M800 SAG: R=%.3f C=%.3f sag=%.3f X_new_start=%.3f Dcorr=%.3f Xfinal=%.3f\r\n",
              Rbore, Cslot, sag, X_new_start, Dcorr, X_final);
 
-    M800_LOG("M800 AXIS MASK: XZ USED | ALL OTHER AXES PRESERVED (Y, A, etc.)\r\n");
+    M800_LOG("M800 AXIS MASK: XZ USED | ALL OTHER AXES PRESERVED (Y, A, B, C, etc.)\r\n");
 
     // -------------------------------------------------------------------------
     // PLAN DATA INITIALIZATION
@@ -353,12 +355,18 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     plan_g1.feed_rate = gc_state.feed_rate;
     plan_g1.spindle = *gc_state.spindle;
 
+    // -------------------------------------------------------------------------
+    // TRACK LAST COMMANDED POSITION (CRITICAL FOR COORDINATE COHERENCE)
+    // -------------------------------------------------------------------------
+    float last_commanded[N_AXIS];
+    m800_copy_pos(last_commanded, start_pos);
+
     float target[N_AXIS];
 
     // -------------------------------------------------------------------------
     // PRE-POSITIONING (G0 to sag-compensated X + retract Z)
     // -------------------------------------------------------------------------
-    m800_init_target(target);
+    m800_copy_pos(target, last_commanded);
     target[X_AXIS] = X_new_start;
     target[Z_AXIS] = Z_start + R;
 
@@ -366,43 +374,54 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
              target[X_AXIS], target[Z_AXIS]);
 
     mc_line(target, &plan_g0);
+    m800_copy_pos(last_commanded, target);
 
     // -------------------------------------------------------------------------
     // FIRST PASS (ZERO PENETRATION - SAFETY PASS)
     // -------------------------------------------------------------------------
     for(int rep = 0; rep < Lreps; rep++) {
 
-        m800_init_target(target);
+        // G0 SAFE (already at correct position, but included for clarity)
+        m800_copy_pos(target, last_commanded);
         target[X_AXIS] = X_new_start;
         target[Z_AXIS] = Z_start + R;
         M800_LOG("M800 G0 SAFE (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
+        m800_copy_pos(last_commanded, target);
 
-        m800_init_target(target);
+        // G1 DEPTH (plunge in X only, Z unchanged)
+        m800_copy_pos(target, last_commanded);
         target[X_AXIS] = X_new_start;
-        target[Z_AXIS] = Z_start + R;
+        // Z remains at Z_start + R
         M800_LOG("M800 G1 DEPTH (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g1);
+        m800_copy_pos(last_commanded, target);
 
-        m800_init_target(target);
+        // G1 LENGTH (cut in Z only, X unchanged)
+        m800_copy_pos(target, last_commanded);
         target[Z_AXIS] = Z_start + Q;
         M800_LOG("M800 G1 LENGTH (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g1);
+        m800_copy_pos(last_commanded, target);
 
-        m800_init_target(target);
+        // G0 BACKX (retract in X only, Z unchanged)
+        m800_copy_pos(target, last_commanded);
         target[X_AXIS] = X_new_start;
         M800_LOG("M800 G0 BACKX (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
+        m800_copy_pos(last_commanded, target);
 
-        m800_init_target(target);
+        // G0 BACKZ (retract in Z only, X unchanged)
+        m800_copy_pos(target, last_commanded);
         target[Z_AXIS] = Z_start + R;
         M800_LOG("M800 G0 BACKZ (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
+        m800_copy_pos(last_commanded, target);
     }
 
     // -------------------------------------------------------------------------
@@ -420,37 +439,46 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
 
         for(int rep = 0; rep < Lreps; rep++) {
 
-            m800_init_target(target);
+            // G0 SAFE (position at Z_start + R, X at X_new_start)
+            m800_copy_pos(target, last_commanded);
             target[X_AXIS] = X_new_start;
             target[Z_AXIS] = Z_start + R;
             M800_LOG("M800 G0 SAFE:   X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
+            m800_copy_pos(last_commanded, target);
 
-            m800_init_target(target);
+            // G1 DEPTH (plunge to new X depth, Z unchanged)
+            m800_copy_pos(target, last_commanded);
             target[X_AXIS] = X_target;
-            target[Z_AXIS] = Z_start + R;
             M800_LOG("M800 G1 DEPTH:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g1);
+            m800_copy_pos(last_commanded, target);
 
-            m800_init_target(target);
+            // G1 LENGTH (cut full Z length, X unchanged)
+            m800_copy_pos(target, last_commanded);
             target[Z_AXIS] = Z_start + Q;
             M800_LOG("M800 G1 LENGTH: X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g1);
+            m800_copy_pos(last_commanded, target);
 
-            m800_init_target(target);
+            // G0 BACKX (retract X to safe X, Z unchanged)
+            m800_copy_pos(target, last_commanded);
             target[X_AXIS] = X_new_start;
             M800_LOG("M800 G0 BACKX:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
+            m800_copy_pos(last_commanded, target);
 
-            m800_init_target(target);
+            // G0 BACKZ (retract Z to safe Z, X unchanged)
+            m800_copy_pos(target, last_commanded);
             target[Z_AXIS] = Z_start + R;
             M800_LOG("M800 G0 BACKZ:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
+            m800_copy_pos(last_commanded, target);
         }
     }
 
@@ -461,7 +489,7 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
     plan_g0.condition.rapid_motion = On;
     plan_g0.spindle = *gc_state.spindle;
 
-    m800_init_target(target);
+    m800_copy_pos(target, last_commanded);
     if(return_home) {
         target[X_AXIS] = X_start;
         target[Z_AXIS] = Z_start;
@@ -474,6 +502,7 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
              target[X_AXIS], target[Z_AXIS]);
 
     mc_line(target, &plan_g0);
+    m800_copy_pos(last_commanded, target);
 
     protocol_buffer_synchronize();
 
