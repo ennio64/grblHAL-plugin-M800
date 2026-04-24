@@ -1,4 +1,4 @@
-	// ============================================================================
+// ============================================================================
 //  M800 – Internal Longitudinal Keyway Cutting Cycle for Lathe
 // ============================================================================
 //
@@ -15,7 +15,7 @@
 //
 //      The cycle performs:
 //          • Initial positioning at the current X/Z coordinates
-//          • A first “dry” pass with zero penetration (safety pass)
+//          • A first "dry" pass with zero penetration (safety pass)
 //          • Progressive depth increments in X (P per pass)
 //          • Full‑length cutting strokes in Z (length Q)
 //          • Rapid retracts in X and Z using G0
@@ -33,14 +33,14 @@
 //
 //      Sag is the radial difference between:
 //          • the bore radius
-//          • the distance from the bore center to the tool’s cutting edge
+//          • the distance from the bore center to the tool's cutting edge
 //
 //      Formula:
 //          sag = Rbore – sqrt( Rbore² – (S/2)² )
 //
 //      The cycle automatically:
-//          • shifts the starting X position inward by “sag”
-//          • increases the commanded depth D by “sag”
+//          • shifts the starting X position inward by "sag"
+//          • increases the commanded depth D by "sag"
 //          • ensures the final X position corresponds to the *true* depth
 //
 //      This guarantees:
@@ -77,9 +77,9 @@
 //
 //      R   Z retract distance before each plunge (POSITIVE value).
 //
-//                L        Number of repetitions at each depth level (integer ≥ 1).
-//                          Used when multiple cutting strokes are required at the same depth.
-//                          Default = L1.
+//      L   Number of repetitions at each depth level (integer ≥ 1).
+//          Used when multiple cutting strokes are required at the same depth.
+//          Default = L1.
 //
 //      H   Return to the initial position at the end of the cycle.
 //          H1 = return (default)
@@ -114,7 +114,7 @@
 //
 //  No modifications to the GRBLHAL core are required.
 //
-//  “M800 CYCLE END” is printed only after the planner buffer is fully empty,
+//  "M800 CYCLE END" is printed only after the planner buffer is fully empty,
 //  guaranteeing that the cycle has physically completed.
 //
 // ----------------------------------------------------------------------------
@@ -165,9 +165,6 @@
 #define M800_LOG(...)
 #endif
 
-#define M800_LOCK_UNUSED_AXES(t) \
-    m800_lock_unused_axes(t, start_pos, dbg)
-
 #include "grbl/hal.h"
 #include "grbl/protocol.h"
 #include "grbl/motion_control.h"
@@ -183,6 +180,26 @@
 
 extern stepper_t st;
 static user_mcode_ptrs_t user_mcode_prev;
+
+
+// -----------------------------------------------------------------------------
+// HELPER: INITIALIZE TARGET WITH CURRENT MACHINE POSITION (ALL AXES)
+// -----------------------------------------------------------------------------
+
+static void m800_init_target(float target[N_AXIS])
+{
+    for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
+        bool axis_present = (settings.axis[axis].steps_per_mm > 0.0f) ||
+                            (settings.axis[axis].max_rate > 0.0f);
+        
+        if (axis_present) {
+            // Convert from steps to machine units (mm/degrees)
+            target[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
+        } else {
+            target[axis] = 0.0f;
+        }
+    }
+}
 
 
 // -----------------------------------------------------------------------------
@@ -241,47 +258,6 @@ static status_code_t m800_validate(parser_block_t *gc_block)
     return Status_OK;
 }
 
-// -----------------------------------------------------------------------------
-// LOCK UNUSED AXES
-// -----------------------------------------------------------------------------
-
-// This function ensures that only the axes actually used by the M800 cycle
-// (X and Z) are allowed to move. All other present axes (Y, A, etc.) are forced
-// to remain at their starting position.
-//
-// Notes:
-// - "Present" axes are detected by checking whether they have valid motion
-//   parameters (steps_per_mm > 0 for linear axes, or max_rate > 0 for rotary).
-// - If an axis is present but its target position has not changed compared to
-//   the starting position, it is locked by restoring the start position.
-// - No debug printing is done here anymore; this function is purely mechanical.
-// -----------------------------------------------------------------------------
-
-static void m800_lock_unused_axes(float *t,
-                                  const float start_pos[N_AXIS],
-                                  char dbg_buf[128])
-{
-    for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
-
-        // Determine whether the axis physically exists on this machine.
-        // Linear axes have steps_per_mm > 0.
-        // Rotary axes have max_rate > 0.
-        bool axis_present =
-            (settings.axis[axis].steps_per_mm > 0.0f) ||
-            (settings.axis[axis].max_rate > 0.0f);
-
-        if (!axis_present)
-            continue;   // Skip axes that do not exist.
-
-        float before = t[axis];         // Target position computed by the cycle
-        float start  = start_pos[axis]; // Machine position at cycle start
-
-        // If the cycle did not modify this axis, lock it by restoring start_pos.
-        if (before == start) {
-            t[axis] = start;
-        }
-    }
-}
 
 // -----------------------------------------------------------------------------
 // EXECUTE
@@ -297,23 +273,27 @@ static void m800_execute(uint_fast16_t state, parser_block_t *gc_block)
 
     char dbg[128];
 
-float start_pos[N_AXIS];
+    // -------------------------------------------------------------------------
+    // GET STARTING POSITIONS (ALL AXES)
+    // -------------------------------------------------------------------------
+    float start_pos[N_AXIS];
+    float X_start = 0.0f, Z_start = 0.0f;
 
-for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
+    for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
+        bool axis_present = (settings.axis[axis].steps_per_mm > 0.0f) ||
+                            (settings.axis[axis].max_rate > 0.0f);
 
-    bool axis_present =
-        (settings.axis[axis].steps_per_mm > 0.0f) ||
-        (settings.axis[axis].max_rate > 0.0f);
-
-    if (axis_present) {
-        start_pos[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
-    } else {
-        start_pos[axis] = 0.0f;
+        if (axis_present) {
+            start_pos[axis] = sys.position[axis] / settings.axis[axis].steps_per_mm;
+            if (axis == X_AXIS) X_start = start_pos[axis];
+            if (axis == Z_AXIS) Z_start = start_pos[axis];
+        } else {
+            start_pos[axis] = 0.0f;
+        }
     }
-}
 
     // -------------------------------------------------------------------------
-    // PARAMETRI
+    // PARAMETERS
     // -------------------------------------------------------------------------
     float D = gc_block->values.d;
     float Q = -gc_block->values.q;
@@ -325,12 +305,6 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
 
     protocol_buffer_synchronize();
 
-    float X_raw = sys.position[X_AXIS];
-    float Z_raw = sys.position[Z_AXIS];
-
-    float X_start = X_raw / settings.axis[X_AXIS].steps_per_mm;
-    float Z_start = Z_raw / settings.axis[Z_AXIS].steps_per_mm;
-
     // ALWAYS ON
     hal.stream.write("M800 CYCLE START\r\n");
 
@@ -339,7 +313,7 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
              X_start, Z_start, Q, W, gc_state.feed_rate);
 
     // -------------------------------------------------------------------------
-    // SAG
+    // SAG COMPENSATION
     // -------------------------------------------------------------------------
     float Rbore = X_start;
     float Cslot = W;
@@ -361,14 +335,10 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
     M800_LOG("M800 SAG: R=%.3f C=%.3f sag=%.3f X_new_start=%.3f Dcorr=%.3f Xfinal=%.3f\r\n",
              Rbore, Cslot, sag, X_new_start, Dcorr, X_final);
 
-    // -------------------------------------------------------------------------
-    // PRINT AXIS MASK
-    // -------------------------------------------------------------------------
-
-    M800_LOG("M800 AXIS MASK: XZ USED | YA BLOCKED\r\n");
+    M800_LOG("M800 AXIS MASK: XZ USED | ALL OTHER AXES PRESERVED (Y, A, etc.)\r\n");
 
     // -------------------------------------------------------------------------
-    // PRE-POSIZIONAMENTO
+    // PLAN DATA INITIALIZATION
     // -------------------------------------------------------------------------
     plan_line_data_t plan_g0;
     plan_line_data_t plan_g1;
@@ -384,12 +354,13 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
     plan_g1.spindle = *gc_state.spindle;
 
     float target[N_AXIS];
-    memcpy(target, sys.position, sizeof(target));
 
+    // -------------------------------------------------------------------------
+    // PRE-POSITIONING (G0 to sag-compensated X + retract Z)
+    // -------------------------------------------------------------------------
+    m800_init_target(target);
     target[X_AXIS] = X_new_start;
     target[Z_AXIS] = Z_start + R;
-
-    M800_LOCK_UNUSED_AXES(target);
 
     M800_LOG("M800 G0 SAG POS: X=%.3f Z=%.3f\r\n",
              target[X_AXIS], target[Z_AXIS]);
@@ -397,45 +368,45 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
     mc_line(target, &plan_g0);
 
     // -------------------------------------------------------------------------
-    // PRIMA PASSATA (NO PENETRAZIONE)
+    // FIRST PASS (ZERO PENETRATION - SAFETY PASS)
     // -------------------------------------------------------------------------
     for(int rep = 0; rep < Lreps; rep++) {
 
+        m800_init_target(target);
         target[X_AXIS] = X_new_start;
         target[Z_AXIS] = Z_start + R;
-        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G0 SAFE (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
 
+        m800_init_target(target);
         target[X_AXIS] = X_new_start;
         target[Z_AXIS] = Z_start + R;
-        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G1 DEPTH (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g1);
 
+        m800_init_target(target);
         target[Z_AXIS] = Z_start + Q;
-        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G1 LENGTH (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g1);
 
+        m800_init_target(target);
         target[X_AXIS] = X_new_start;
-        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G0 BACKX (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
 
+        m800_init_target(target);
         target[Z_AXIS] = Z_start + R;
-        M800_LOCK_UNUSED_AXES(target);
         M800_LOG("M800 G0 BACKZ (FIRST): X=%.3f Z=%.3f (pass=0 rep=%d)\r\n",
                  target[X_AXIS], target[Z_AXIS], rep+1);
         mc_line(target, &plan_g0);
     }
 
     // -------------------------------------------------------------------------
-    // PASSATE RADIALI
+    // RADIAL PASSES (PROGRESSIVE DEPTH)
     // -------------------------------------------------------------------------
     int passes = (int)ceilf(Dcorr / P);
 
@@ -449,34 +420,34 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
 
         for(int rep = 0; rep < Lreps; rep++) {
 
+            m800_init_target(target);
             target[X_AXIS] = X_new_start;
             target[Z_AXIS] = Z_start + R;
-            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G0 SAFE:   X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
 
+            m800_init_target(target);
             target[X_AXIS] = X_target;
             target[Z_AXIS] = Z_start + R;
-            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G1 DEPTH:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g1);
 
+            m800_init_target(target);
             target[Z_AXIS] = Z_start + Q;
-            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G1 LENGTH: X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g1);
 
+            m800_init_target(target);
             target[X_AXIS] = X_new_start;
-            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G0 BACKX:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
 
+            m800_init_target(target);
             target[Z_AXIS] = Z_start + R;
-            M800_LOCK_UNUSED_AXES(target);
             M800_LOG("M800 G0 BACKZ:  X=%.3f Z=%.3f (pass=%d rep=%d)\r\n",
                      target[X_AXIS], target[Z_AXIS], pass, rep+1);
             mc_line(target, &plan_g0);
@@ -484,12 +455,13 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
     }
 
     // -------------------------------------------------------------------------
-    // RITORNO FINALE
+    // FINAL RETURN
     // -------------------------------------------------------------------------
     plan_data_init(&plan_g0);
     plan_g0.condition.rapid_motion = On;
     plan_g0.spindle = *gc_state.spindle;
 
+    m800_init_target(target);
     if(return_home) {
         target[X_AXIS] = X_start;
         target[Z_AXIS] = Z_start;
@@ -497,8 +469,6 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
         target[X_AXIS] = X_new_start;
         target[Z_AXIS] = Z_start + R;
     }
-
-    M800_LOCK_UNUSED_AXES(target);
 
     M800_LOG("M800 RETURN: X=%.3f Z=%.3f\r\n",
              target[X_AXIS], target[Z_AXIS]);
@@ -511,12 +481,12 @@ for (uint_fast8_t axis = 0; axis < N_AXIS; axis++) {
     hal.stream.write("M800 CYCLE END\r\n");
 }
 
+
 // -----------------------------------------------------------------------------
 // INIT
 // -----------------------------------------------------------------------------
 
 void keyway_init(void)
-
 {
     memcpy(&user_mcode_prev, &grbl.user_mcode, sizeof(user_mcode_ptrs_t));
 
